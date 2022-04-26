@@ -15,4 +15,4 @@ albumentations
 
 학습결과는 lightning_logs 폴더에 버전별로 기록됨(ckpt, config, hparams)
 
-## 제출: test.py
+### 제출: test.py
