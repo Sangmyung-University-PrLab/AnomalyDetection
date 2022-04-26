@@ -1,4 +1,9 @@
 __pycache__/
 .DS_store
 .env/
-data/
+open/
+lightning_logs/
+.*/
+artifacts/
+version*/
+config[1-9].yaml

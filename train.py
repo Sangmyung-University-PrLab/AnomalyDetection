@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import sys
+import random
 import cv2
 import timm
 import numpy as np
@@ -27,106 +29,117 @@ from torchmetrics import Accuracy
 
 from pytorch_lightning import LightningDataModule, LightningModule
 from pytorch_lightning.utilities.cli import LightningCLI
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 
-class DatasetMNIST(torch.utils.data.Dataset):
-    def __init__(self, image_folder, label_df, transforms):        
-        self.image_folder = image_folder
-        self.label_df = label_df
+class CustomLightningCLI(LightningCLI):
+    def add_arguments_to_parser(self, parser):
+        parser.add_lightning_class_args(EarlyStopping, "early_stopping")
+        parser.set_defaults({"early_stopping.monitor": "valid_acc", "early_stopping.patience": 10})
+        parser.add_lightning_class_args(ModelCheckpoint, "ModelCheckpoint")
+        parser.set_defaults({"ModelCheckpoint.monitor": "valid_loss", "ModelCheckpoint.filename":"abnomaly_{epoch:02d}_{valid_acc:.2f}_{valid_loss:.2f}",\
+            "ModelCheckpoint.save_top_k": 5})
+        parser.set_defaults({"trainer.max_epochs": 300})
+        parser.set_defaults({"trainer.min_epochs": 100})
+
+
+class DatasetABNORM(torch.utils.data.Dataset):
+    def __init__(self, image_dir, dataset_df, transforms):        
+        self.image_dir = image_dir
+        self.image_df = dataset_df["file_name"].tolist()
+        self.labels = dataset_df["label"].tolist()
+        label_unique = sorted(np.unique(self.labels))
+        label_unique = {key:value for key,value in zip(label_unique, range(len(label_unique)))}
+        self.train_labels = [label_unique[k] for k in self.labels]
         self.transforms = transforms
-
+        
     def __len__(self):
-        return len(self.label_df)
+        return len(self.train_labels)
     
-    def __getitem__(self, index):        
-        image_fn = self.image_folder +\
-            str(self.label_df.iloc[index,0]).zfill(5) + '.png'
-        image = cv2.imread(image_fn, cv2.IMREAD_GRAYSCALE)        
-        image = cv2.resize(image, dsize=(224,224))
-        image = cv2.merge((image, image, image))
-
-        label = self.label_df.iloc[index,1:].values.astype('float')
+    def __getitem__(self, index):
+        image = cv2.imread(self.image_dir +self.image_df[index])
+        image = cv2.resize(image, dsize=(512,512))
+        label = self.train_labels[index]
 
         if self.transforms:            
             image = self.transforms(image=image)['image'] / 255.0
-
         return image, label
-    
+
+        
 class ImageClassifier(LightningModule):
-    def __init__(self, model, lr=1.0, gamma=0.7, batch_size=32):
+    def __init__(self, model, lr=0.001, gamma=0.7, smoothing=0.1):
         super().__init__()
-        self.save_hyperparameters(ignore="model")
-        self.model = model or timm.create_model('gluon_resnext101_64x4d', num_classes=512)
+        self.save_hyperparameters()
+        self.model_name = model
+        self.model = timm.create_model(model, pretrained=True, num_classes=88)
         self.val_acc = Accuracy()
-        self.loss_func = torch.nn.MultiLabelSoftMarginLoss()
-        # self.conv2d = torch.nn.Conv2d(1, 3, 3, stride=1)
-        self.FC = torch.nn.Linear(512, 26)
+        self.loss_func = torch.nn.CrossEntropyLoss(label_smoothing=self.hparams.smoothing)
+        for key, val in self.hparams.items():
+            mlflow.log_param(key, val)
+
 
     def forward(self, x):
-
-        x = F.relu(self.model(x))
-        x = self.FC(x)
-        return x
+        return self.model(x)
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        logits = self.forward(x)
-        loss = self.loss_func(logits, y)
+        pred = self.forward(x)
+        loss = self.loss_func(pred, y)
+        self.log("smoothing", self.hparams.smoothing)
         self.log("train_loss", loss)
         self.log("train_lr", self.optimizer.state_dict()['param_groups'][0]['lr'])
         return loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        logits = self.forward(x)
-        loss = self.loss_func(logits, y)
-        self.val_acc(logits, y.int())
-        self.log("valid_acc", self.val_acc)
+        pred = self.forward(x)
+        loss = self.loss_func(pred, y)
+        self.val_acc(pred, y.int())
+        self.log("valid_acc", self.val_acc.compute())
         self.log("valid_loss", loss)
+        self.val_acc.reset()
 
     def configure_optimizers(self):
-        # optimizer = torch.optim.Adadelta(self.model.parameters(), lr=self.hparams.lr)
         self.optimizer = torch.optim.Adam(self.model.parameters(), self.hparams.lr)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', patience=2, factor=self.hparams.gamma)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', patience=5, factor=self.hparams.gamma)
 
         return (
             {
                 "optimizer": self.optimizer,
                 "lr_scheduler": {
                     "scheduler": self.scheduler,
-                    "monitor": "valid_acc",
+                    "monitor": "valid_loss",
                 },
             }
         )
 
 
-class MNISTDataModule(LightningDataModule):
-    def __init__(self, batch_size=32):
+class ABNORMdataModule(LightningDataModule):
+    def __init__(self, batch_size=8, csv_fn="open/train_df_aug.csv", image_dir = "./open/train/"):
         super().__init__()
         self.save_hyperparameters()
+        self.data_set = pd.read_csv(csv_fn)
+        self.image_dir = image_dir
+        # data shuffle
+        self.data_set = self.data_set.sample(frac=1).reset_index(drop=True)
         
-        self.image_path = "./data/dirty_mnist_2nd/"
-        self.label_path = "./data/dirty_mnist_2nd_answer.csv"
-        self.data_set = pd.read_csv(self.label_path)
-        self.valid_idx_nb = int(len(self.data_set) * (1 / 5))
-        self.valid_idx = np.arange(0, self.valid_idx_nb)
+        # train, test split
+        self.train_data = self.data_set.sample(frac=0.85,random_state=42) #random state is a seed value
+        self.valid_data = self.data_set.drop(self.train_data.index)
 
-        print('[info msg] validation fold idx !!\n')        
-        print(self.valid_idx)
-        print('=' * 50)
-
-        self.train_data = self.data_set.drop(self.valid_idx)
-        self.valid_data = self.data_set.iloc[self.valid_idx]
-
-        self.mnist_transforms = {
+        self.transforms = {
             'train' : albumentations.Compose([
                     albumentations.RandomRotate90(),
+                    albumentations.GaussNoise(),
+                    albumentations.ColorJitter(),
+                    albumentations.HorizontalFlip(p=0.5),
+                    albumentations.RandomBrightnessContrast(p=0.33),
                     albumentations.OneOf([
                         albumentations.GridDistortion(distort_limit=(-0.3, 0.3), border_mode=cv2.BORDER_CONSTANT, p=1),
-                        albumentations.ShiftScaleRotate(rotate_limit=15, border_mode=cv2.BORDER_CONSTANT, p=1),        
+                        albumentations.ShiftScaleRotate(rotate_limit=90, border_mode=cv2.BORDER_CONSTANT, p=1),        
                         albumentations.ElasticTransform(alpha_affine=10, border_mode=cv2.BORDER_CONSTANT, p=1),
                     ], p=1),    
-                    albumentations.Cutout(num_holes=16, max_h_size=15, max_w_size=15, fill_value=0),
+                    albumentations.CoarseDropout(max_holes=16, max_height=50, max_width=50, fill_value=0),
                     albumentations.pytorch.ToTensorV2(),
                 ]),
             'valid' : albumentations.Compose([        
@@ -137,40 +150,33 @@ class MNISTDataModule(LightningDataModule):
                 ]),
         }
 
-    @property
-    def transform(self):
-        return T.Compose([T.ToTensor(), T.Normalize((0.1307,), (0.3081,))])
-
     def train_dataloader(self):
-        train_dataset = DatasetMNIST(
-                image_folder=self.image_path ,
-                label_df=self.train_data,
-                transforms=self.mnist_transforms['train']
+        train_dataset = DatasetABNORM(
+                image_dir=self.image_dir,
+                dataset_df=self.train_data,
+                transforms=self.transforms['train']
             )
         return torch.utils.data.DataLoader(train_dataset, batch_size=self.hparams.batch_size, num_workers=8)
 
     def val_dataloader(self):
-        val_dataset = DatasetMNIST(
-                image_folder=self.image_path ,
-                label_df=self.train_data,
-                transforms=self.mnist_transforms['valid']
+        val_dataset = DatasetABNORM(
+                image_dir=self.image_dir,
+                dataset_df=self.valid_data,
+                transforms=self.transforms['valid']
             )
         return torch.utils.data.DataLoader(val_dataset, batch_size=self.hparams.batch_size, num_workers=8)
 
 
 def cli_main():
     # The LightningCLI removes all the boilerplate associated with arguments parsing. This is purely optional.
-    cli = LightningCLI(
-        ImageClassifier, MNISTDataModule, seed_everything_default=42, save_config_overwrite=True, run=False
+    cli = CustomLightningCLI(
+        ImageClassifier, ABNORMdataModule, seed_everything_default=42, save_config_overwrite=True, run=False
     )
-    with mlflow.start_run():# run mlflow logger
-        mlflow.log_artifact(os.path.abspath(__file__), 'source code')# log .py file or other artifacts
-        cli.trainer.fit(cli.model, datamodule=cli.datamodule)
-        cli.trainer.test(ckpt_path="best", datamodule=cli.datamodule)
-
+    cli.trainer.fit(cli.model, datamodule=cli.datamodule)
 
 if __name__ == "__main__":
-    mlflow.set_tracking_uri('http://prlab02.iptime.org:5000')  # set up connection
-    mlflow.set_experiment('gluon_resnext101_64x4d')  # set the experiment
-    mlflow.pytorch.autolog()
+    mlflow.set_tracking_uri('http://prserver.iptime.org:9650')  # set up connection
+    mlflow.set_experiment('')  # set the experiment
+    mlflow.start_run() #run mlflow logger
     cli_main()
+    mlflow.end_run()

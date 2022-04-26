@@ -1,6 +1,6 @@
 seed_everything: 42
 trainer:
-  logger: false
+  logger: true
   checkpoint_callback: null
   enable_checkpointing: true
   callbacks: null
@@ -10,8 +10,8 @@ trainer:
   process_position: 0
   num_nodes: 1
   num_processes: null
-  devices: null
-  gpus: null
+  devices: 1
+  gpus: 0
   auto_select_gpus: false
   tpu_cores: null
   ipus: null
@@ -23,8 +23,8 @@ trainer:
   check_val_every_n_epoch: 1
   fast_dev_run: false
   accumulate_grad_batches: null
-  max_epochs: null
-  min_epochs: null
+  max_epochs: 300
+  min_epochs: 30
   max_steps: -1
   min_steps: null
   max_time: null
@@ -34,15 +34,15 @@ trainer:
   limit_predict_batches: null
   val_check_interval: null
   flush_logs_every_n_steps: null
-  log_every_n_steps: 50
-  accelerator: null
+  log_every_n_steps: 5
+  accelerator: auto
   strategy: null
   sync_batchnorm: false
   precision: 32
   enable_model_summary: true
   weights_summary: top
   weights_save_path: null
-  num_sanity_val_steps: 2
+  num_sanity_val_steps: 0
   resume_from_checkpoint: null
   profiler: null
   benchmark: null
@@ -62,8 +62,35 @@ trainer:
   terminate_on_nan: null
 model:
   model: null
-  lr: 1.0
+  lr: 0.001
   gamma: 0.7
-  batch_size: 32
+  smoothing: 0.1
 data:
-  batch_size: 32
+  batch_size: 16
+  csv_fn: open/train_df_aug.csv
+  image_dir: ./open/train/
+early_stopping:
+  monitor: valid_acc
+  min_delta: 0.0
+  patience: 10
+  verbose: false
+  mode: min
+  strict: true
+  check_finite: true
+  stopping_threshold: null
+  divergence_threshold: null
+  check_on_train_epoch_end: null
+ModelCheckpoint:
+  dirpath: null
+  filename: abnomaly_{epoch:02d}_{valid_acc:.2f}_{valid_loss:.2f}
+  monitor: valid_loss
+  verbose: false
+  save_last: null
+  save_top_k: 5
+  save_weights_only: false
+  mode: min
+  auto_insert_metric_name: true
+  every_n_train_steps: null
+  train_time_interval: null
+  every_n_epochs: null
+  save_on_train_epoch_end: null
