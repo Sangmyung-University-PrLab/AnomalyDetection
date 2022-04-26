@@ -1,7 +1,6 @@
 # AnomalyDetection
 
-"""
-
+````sh
 필요 라이브러리
 
 pytorch_lightning
@@ -10,8 +9,7 @@ pandas
 timm
 opencv-python
 albumentations
-
-"""
+````
 
 실행방법: python train.py --config config.yaml
 
