@@ -37,13 +37,13 @@ class CustomLightningCLI(LightningCLI):
         parser.add_lightning_class_args(EarlyStopping, "early_stopping")
         parser.set_defaults({"early_stopping.monitor": "valid_acc", "early_stopping.patience": 10})
         parser.add_lightning_class_args(ModelCheckpoint, "ModelCheckpoint")
-        parser.set_defaults({"ModelCheckpoint.monitor": "valid_loss", "ModelCheckpoint.filename":"abnomaly_{epoch:02d}_{valid_acc:.2f}_{valid_loss:.2f}",\
+        parser.set_defaults({"ModelCheckpoint.monitor": "valid_loss", "ModelCheckpoint.filename":"anomaly_{epoch:02d}_{valid_acc:.2f}_{valid_loss:.2f}",\
             "ModelCheckpoint.save_top_k": 5})
         parser.set_defaults({"trainer.max_epochs": 300})
         parser.set_defaults({"trainer.min_epochs": 100})
 
 
-class DatasetABNORM(torch.utils.data.Dataset):
+class DatasetANORM(torch.utils.data.Dataset):
     def __init__(self, image_dir, dataset_df, transforms):        
         self.image_dir = image_dir
         self.image_df = dataset_df["file_name"].tolist()
@@ -114,7 +114,7 @@ class ImageClassifier(LightningModule):
         )
 
 
-class ABNORMdataModule(LightningDataModule):
+class ANORMdataModule(LightningDataModule):
     def __init__(self, batch_size=8, csv_fn="open/train_df_aug.csv", image_dir = "./open/train/"):
         super().__init__()
         self.save_hyperparameters()
@@ -151,7 +151,7 @@ class ABNORMdataModule(LightningDataModule):
         }
 
     def train_dataloader(self):
-        train_dataset = DatasetABNORM(
+        train_dataset = DatasetANORM(
                 image_dir=self.image_dir,
                 dataset_df=self.train_data,
                 transforms=self.transforms['train']
@@ -159,7 +159,7 @@ class ABNORMdataModule(LightningDataModule):
         return torch.utils.data.DataLoader(train_dataset, batch_size=self.hparams.batch_size, num_workers=8)
 
     def val_dataloader(self):
-        val_dataset = DatasetABNORM(
+        val_dataset = DatasetANORM(
                 image_dir=self.image_dir,
                 dataset_df=self.valid_data,
                 transforms=self.transforms['valid']
@@ -170,7 +170,7 @@ class ABNORMdataModule(LightningDataModule):
 def cli_main():
     # The LightningCLI removes all the boilerplate associated with arguments parsing. This is purely optional.
     cli = CustomLightningCLI(
-        ImageClassifier, ABNORMdataModule, seed_everything_default=42, save_config_overwrite=True, run=False
+        ImageClassifier, ANORMdataModule, seed_everything_default=42, save_config_overwrite=True, run=False
     )
     cli.trainer.fit(cli.model, datamodule=cli.datamodule)
 
